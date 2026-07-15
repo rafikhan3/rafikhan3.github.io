@@ -1,0 +1,343 @@
+## 14.11 GUI (Abaqus CAE) Walkthrough
+
+**Honest caveat up front:** CAE's substructure support is **partial**. Generation and usage exist under **Model → Substructure**, but two things have **no GUI equivalent** and must be added via the **Keyword Editor**:
+
+- `*ELEMENT RECOVERY MATRIX` (scoping recovery to the hole elements)
+- `*SUBSTRUCTURE MATRIX OUTPUT` (writing the readable `.mtx`)
+
+Both are flagged **[KEYWORD EDITOR]** below. Everything else is clickable.
+
+---
+
+### 14.11.0 Finding the centroid of the hexagonal tubesheet
+
+You need this for `RP_BOT` / `RP_TOP`. **Do not eyeball it.**
+
+**Method 1 — query the mass properties (best, exact):**
+1. Switch to the **Part** module, with the tubesheet part displayed.
+2. **Tools → Query…**
+3. Select **Mass properties** (under General Queries).
+4. Pick the solid part → **Done**.
+5. The message area prints **Volume**, **Mass**, and **Centroid (X, Y, Z)**. Read the X, Y directly.
+
+> This is the true area/volume centroid of the *actual* hexagon, including the angled sides — which is exactly what you want and what no hand sketch will give you reliably.
+
+**Method 2 — probe the face centroid:**
+1. **Tools → Query → Probe values**.
+2. Set **Probe: Elements** (or Nodes), pick the face of interest.
+3. Less direct than Method 1; use it as a spot check.
+
+**Sanity check by hand:** your hexagon has a flat bottom, two vertical sides, two inward-angled sides, and a flat top — so it is **symmetric about its vertical centerline**. Therefore **X_centroid = the midpoint of the flat bottom edge** (by symmetry). Only **Y_centroid** requires the query. If Method 1's X differs from your symmetry axis, something is off in the geometry.
+
+**Using it:** the two reference points share the same (X, Y) = the centroid, and differ only in Z:
+```
+RP_BOT = (X_c, Y_c, 0.0)
+RP_TOP = (X_c, Y_c, 2.985)
+```
+
+> **Note:** the centroid is the natural, unbiased choice for the reference point, but with **kinematic coupling** the RP location does **not** change the physics — the face is rigid, so any RP on it gives an equivalent (just differently-referenced) stiffness. The centroid keeps the moment terms clean and interpretable, which is why we use it.
+
+---
+
+### JOB 1 (GUI) — Generate the substructure
+
+#### Step 1 — Property module: isotropic material
+
+1. **Module: Property**
+2. **Material → Create**. Name: `INCONEL_650F`.
+3. **Mechanical → Elasticity → Elastic**. Type: **Isotropic**.
+4. Young's Modulus = `27e6`, Poisson's Ratio = `0.3`. **OK**.
+   - *(§14.0: isotropic — **not** the §9 orthotropic card, because the holes are meshed.)*
+5. **Section → Create**. Solid → Homogeneous. Material: `INCONEL_650F`. **OK**.
+6. **Assign → Section**. Select the whole part → **Done** → **OK**.
+
+#### Step 2 — Assembly module: instance + reference points
+
+1. **Module: Assembly** → **Instance → Create** → select the part → **Independent (mesh on instance)** → **OK**.
+2. Get the centroid (§14.11.0).
+3. **Tools → Reference Point**. Enter coordinates `(X_c, Y_c, 0.0)` → this is **RP-1** (`RP_BOT`).
+4. **Tools → Reference Point** again: `(X_c, Y_c, 2.985)` → **RP-2** (`RP_TOP`).
+5. **Tools → Set → Create** → Type: **Geometry** → name `RP_BOT_SET`, select RP-1 → **Done**. Repeat for `RP_TOP_SET`.
+
+#### Step 3 — Define the interface surfaces
+
+1. **Tools → Surface → Create**. Name: `SURF_BOT`. Type: **Geometry**.
+2. Select the **bottom face** (Z = 0) of the perforated region → **Done**.
+3. Repeat for `SURF_TOP` (the Z = 2.985 face).
+4. **Tools → Set → Create** → Type: **Element** → name `ELS_HOLES` → select the elements **ringing the holes** (the ones whose stress you want to recover).
+   - *Tip:* easiest via **Tools → Set → Create → Element**, then use **by angle / by feature** or box-select the hole rings. Keep this set as small as is useful — the recovery matrix cost scales with it.
+
+#### Step 4 — Interaction module: kinematic coupling
+
+1. **Module: Interaction**
+2. **Constraint → Create** → **Coupling** → Continue.
+3. **Control point:** pick **RP-1** (`RP_BOT`) → **Done**.
+4. **Surface:** pick `SURF_BOT` → **Done**.
+5. In the dialog: **Coupling type = Kinematic**. Check **U1 U2 U3 UR1 UR2 UR3** (all six). **OK**.
+6. **Repeat** for **RP-2** / `SURF_TOP`.
+
+> Why kinematic: rigid grips for a pull test (§14.1). If you later mate this to a compliant part, revisit §2.2.
+
+#### Step 5 — Step module: substructure generation
+
+1. **Module: Step**
+2. **Model → Substructure → Create…**  *(if your CAE version lacks this, create a **Static, General** step and convert it via the Keyword Editor — see the note at the end)*
+3. Alternatively and more reliably: **Step → Create** → **Substructure Generation** → Continue.
+4. In the dialog:
+   - **Substructure identifier:** `Z101`
+   - **Recovery matrix:** check **"Whole model"** or **"Region"** → choose **Region** → select `ELS_HOLES`.
+     - *This is the GUI hook for stress recovery. If your version does not expose it, use the [KEYWORD EDITOR] block below.*
+   - **Mass matrix:** unchecked (static only).
+5. **Retained degrees of freedom:** in the same dialog (or **Model → Substructure → Retained DOF**), add:
+   - `RP_BOT_SET` → DOF **1 through 6**
+   - `RP_TOP_SET` → DOF **1 through 6**
+   - Check **Sorted**.
+6. **OK**.
+
+#### Step 6 — [KEYWORD EDITOR] Add recovery + matrix output
+
+**Model → Edit Keywords → <your model name>.**
+
+Find the `*SUBSTRUCTURE GENERATE` block and make it read:
+
+```
+*SUBSTRUCTURE GENERATE, TYPE=Z101, OVERWRITE, RECOVERY MATRIX=YES, MASS MATRIX=NO
+*RETAINED NODAL DOFS, SORTED=YES
+RP_BOT_SET, 1, 6
+RP_TOP_SET, 1, 6
+*ELEMENT RECOVERY MATRIX, ELSET=ELS_HOLES
+S, E
+*SUBSTRUCTURE MATRIX OUTPUT, STIFFNESS=YES, FILE NAME=perf_K, OUTPUT FILE=USER DEFINED
+```
+
+**These two lines are the ones with no GUI equivalent:**
+- `*ELEMENT RECOVERY MATRIX` — without it, **hole stress is unrecoverable** (§14.10).
+- `*SUBSTRUCTURE MATRIX OUTPUT` — without it, **no readable `.mtx`** to parse.
+
+**OK** to close the editor.
+
+#### Step 7 — Job module: run generation
+
+1. **Module: Job** → **Job → Create** → name `perf_gen` → Continue → **OK**.
+2. **Job → Submit → perf_gen**.
+3. **Job → Monitor** to watch for completion.
+4. **Outputs:** `perf_gen.sim` (the superelement) and **`perf_K.mtx`** (the stiffness matrix — this is the file §14.9 parses).
+
+---
+
+### JOB 2 (GUI) — Use the substructure (the pull test)
+
+#### Step 1 — New model, import the superelement
+
+1. **Model → Create** → name `PULL_TEST`.
+2. **Model → Substructure → Import…**
+3. Browse to the generated substructure library (`perf_gen`), select `Z101` → **OK**.
+   - CAE creates a **substructure part** with the two retained reference nodes exposed.
+
+#### Step 2 — Assembly
+
+1. **Module: Assembly** → **Instance → Create** → select the imported substructure → **OK**.
+2. The two retained RPs appear as selectable points. Create sets for them if CAE has not: `RP_BOT_SET`, `RP_TOP_SET`.
+
+#### Step 3 — Step module
+
+1. **Step → Create** → **Static, General** → Continue.
+2. Time period **1.0**; **Nlgeom: Off**. **OK**.
+   - *(A substructure is inherently linear — leave NLGEOM off.)*
+
+#### Step 4 — Load module: BC on the fixed end
+
+1. **Module: Load**
+2. **BC → Create** → Step: `Step-1` → **Mechanical → Displacement/Rotation** → Continue.
+3. Select **RP_BOT** → **Done**.
+4. Check **U1, U2, U3, UR1, UR2, UR3** — all = **0**. **OK**.
+   - This grounds all six rigid-body modes.
+
+#### Step 5 — Load module: the pull
+
+**Option A — prescribed displacement (recommended):**
+1. **BC → Create** → **Mechanical → Displacement/Rotation** → Continue.
+2. Select **RP_TOP** → **Done**.
+3. Set:
+   - **U3 = 0.002985**  (0.1% of t = 2.985 → clean linear pull)
+   - **U1 = 0, U2 = 0** (no lateral drift)
+   - **UR1 = UR2 = UR3 = 0** (rigid grip)
+4. **OK**.
+   - *To **push**, use `U3 = −0.002985`.*
+
+**Option B — applied force:**
+1. **Load → Create** → **Mechanical → Concentrated Force** → Continue.
+2. Select **RP_TOP** → **Done**. **CF3 = 10000** (lb). **OK**.
+3. Leave U1/U2/UR free (or restrain U1, U2 to prevent drift).
+
+#### Step 6 — Field/History output
+
+1. **Output → Field Output Requests → Create** → Continue.
+2. Check **U** (Translation/Rotation) and **RF** (Reaction forces).
+3. Under **State/Field/User/Time**, also request **S** and **E** so recovered stress is written.
+4. **Output → History Output Requests → Create** → Domain: **Set** → `RP_TOP_SET` → request **U3, RF3**.
+
+#### Step 7 — [KEYWORD EDITOR] Invoke stress recovery
+
+**Model → Edit Keywords → PULL_TEST.** Inside the `*STEP` block, add:
+
+```
+*SUBSTRUCTURE RECOVERY, ELSET=ESUB
+*ELEMENT OUTPUT, ELSET=ELS_HOLES
+S, E, MISES
+```
+
+> Without `*SUBSTRUCTURE RECOVERY`, the recovery matrix from Job 1 exists but is **never invoked** — you will get interface reactions but **no hole stress**. This is a very easy step to skip.
+
+#### Step 8 — Submit and read results
+
+1. **Job → Create** → `perf_pull` → **Submit**.
+2. **Module: Visualization** → open `perf_pull.odb`.
+
+**To read the reaction force:**
+- **Result → Field Output** → Variable: **RF**, component **RF3**.
+- **Report → Field Output** → Position: **Unique Nodal** → Variable: **RF3** → select `RP_TOP_SET` → in the **Setup** tab check **Sum** → **Apply**.
+- The written report gives the total **RF3** → `K_axial = RF3 / 0.002985`.
+- *(Or: **Tools → Query → Probe values** → Nodes → click RP_TOP → read RF3.)*
+
+**To see the recovered hole stress:**
+- **Result → Field Output** → Variable: **S**, Invariant: **Mises**.
+- Plot contours — you should see stress concentrations **at the hole edges**.
+- **Sanity check (§14.8):** peak Mises at a hole edge should exceed the net-section average by roughly **2–3×**. If the field is uniform or blank, the recovery matrix did not take — go back to Job 1 Step 6.
+
+---
+
+### 14.11.1 GUI gotchas
+
+- **CAE substructure support is partial.** The two Keyword Editor blocks above are not optional workarounds — they are the only way to get recovery scoping and the readable `.mtx`.
+- **Keyword edits are lost if you regenerate the model** from the GUI in some workflows. If a submit silently drops your recovery, re-open **Edit Keywords** and confirm the lines are still there.
+- **Independent instance** (not Dependent) in Job 1's assembly, or you cannot mesh/select on the instance cleanly.
+- **Reference points must exist in the Assembly**, not the Part, for coupling to the instance surfaces.
+- **`ELS_HOLES` must be an element set**, not a geometry set, for `*ELEMENT RECOVERY MATRIX`.
+- If **Model → Substructure** is missing from your CAE version, build the whole thing as a **Static** step and convert it entirely in **Edit Keywords** using the §14.2 block — the solver does not care that CAE never drew it.
+
+---
+
+## 14.12 CAE Keyword Corrections & Clarifications (from a real build)
+
+Notes captured from an actual CAE-generated keyword file — the common failure points and how the lines should read.
+
+### 14.12.1 Retained DOF — what they are and where they go
+
+**Retained DOF are the bridge between the substructure and the global assembly.** The substructure eliminates *all* interior DOF and keeps only the retained ones — that is the entire mechanism. A few consequences people trip on:
+
+- **A retained DOF is the opposite of a boundary condition.** A BC *removes* a DOF; a retained DOF *preserves* it through condensation. So retained DOF are **not** set in the Load module and **not** entered as a `Displacement/Rotation` BC.
+- They belong to **generation** (`*Substructure Generate`), not loading.
+- CAE frequently does not expose the retained-DOF dialog. If you do not see it, add the line directly in **Edit Keywords**, immediately under `*Substructure Generate`:
+
+```
+*Retained Nodal Dofs, sorted=YES
+RP_BOT_SET, 1, 6
+RP_TOP_SET, 1, 6
+```
+
+**If this line is missing, the substructure retains nothing** and the job errors or produces a useless superelement. This is the most common first-run failure.
+
+### 14.12.2 Recovery scoping — two valid forms (do not use both)
+
+To keep interior stress around the holes, recovery can be requested **two** ways:
+
+**Form 1 — shorthand `elset=` on the generate line (what CAE writes):**
+```
+*Substructure Generate, overwrite, type=Z101, recovery matrix=YES, elset=ELS_HOLES
+*Retained Nodal Dofs, sorted=YES
+RP_BOT_SET, 1, 6
+RP_TOP_SET, 1, 6
+```
+Here `recovery matrix=YES` turns recovery on, and `elset=ELS_HOLES` scopes it to the hole-ring elements. **No separate `*Element Recovery Matrix` line is needed** — this form is self-contained.
+
+**Form 2 — long form with an explicit output selection:**
+```
+*Substructure Generate, overwrite, type=Z101, recovery matrix=YES
+*Retained Nodal Dofs, sorted=YES
+RP_BOT_SET, 1, 6
+RP_TOP_SET, 1, 6
+*Element Recovery Matrix, elset=ELS_HOLES
+S, E
+```
+
+**Use one or the other, not both.** Form 1 is simplest and is what CAE generates; reach for Form 2 only if you want to name specific output variables in the recovery matrix. (An earlier draft of §14.2 over-specified by combining them — Form 1 alone is correct.)
+
+> `ELS_HOLES` **must be an `*Elset`** (element set), not an `*Nset`. `*Element Recovery Matrix` and the `elset=` shorthand both require elements.
+
+### 14.12.3 `*Substructure Matrix Output` — where it goes
+
+It lives **inside the step, after** the generate/retained/recovery lines:
+
+```
+*Step, name=Step-1, nlgeom=NO
+*Substructure Generate, overwrite, type=Z101, recovery matrix=YES, elset=ELS_HOLES
+*Retained Nodal Dofs, sorted=YES
+RP_BOT_SET, 1, 6
+RP_TOP_SET, 1, 6
+*Substructure Matrix Output, stiffness=YES, file name=perf_K, output file=USER DEFINED
+*End Step
+```
+
+This writes the readable `perf_K.mtx` (§14.9). Without it there is no ASCII stiffness matrix to parse.
+
+### 14.12.4 Reference-node naming consistency
+
+CAE may auto-name a reference point's set (e.g. `m_Set-4`) instead of the name you intended. Whatever the bottom RP set is actually called, **the coupling, retained-DOF, BC, and output lines must all use the same name.** Cleanest fix: rename it to `RP_BOT_SET` in CAE (Assembly → Set Manager → Rename) so every reference is consistent. Corrected coupling line:
+
+```
+*Coupling, constraint name=kin_coupling_bot, ref node=RP_BOT_SET, surface=SURF_BOT
+*Kinematic
+```
+
+### 14.12.5 Delete `*Damping Controls`
+
+CAE may insert `*Damping Controls, structural=COMBINED, viscous=COMBINED` into the generation step. For a **static, stiffness-only** generation it is unnecessary and implies dynamic intent you do not have. Remove it.
+
+### 14.12.6 The generation job produces (almost) no ODB — this is expected
+
+**A substructure *generation* job is a reduction, not an analysis. Nothing is solved, so there are no results to view.** Do not expect stress, displacement, or a responsive model in the generation ODB — it will be empty or trivial, and that is **correct, not a failure**.
+
+Generation writes instead:
+- `Z101.sim` / `.sup` — the superelement (the real deliverable)
+- `perf_K.mtx` — the stiffness matrix
+- `.prt`, `.stt`, and library `.mtx` files
+
+**Interior stress only appears in Job 2**, after the superelement is loaded and `*Substructure Recovery` is invoked (§14.7). If you submit generation and open the ODB expecting to see the tubesheet respond, you will think it failed — it did not; the superelement lives in the `.sim`/`.sup` library, not the ODB.
+
+### 14.12.7 Corrected minimal generation step (all fixes applied)
+
+```
+** MATERIALS
+*Material, name=cf_650
+*Elastic
+2.7e+07, 0.3
+**
+** (ELS_HOLES must be an *Elset of the hole-ring elements)
+** (RP_BOT_SET, RP_TOP_SET are the two reference-node sets)
+**
+** STEP
+*Step, name=Step-1, nlgeom=NO
+*Substructure Generate, overwrite, type=Z101, recovery matrix=YES, elset=ELS_HOLES
+*Retained Nodal Dofs, sorted=YES
+RP_BOT_SET, 1, 6
+RP_TOP_SET, 1, 6
+*Substructure Matrix Output, stiffness=YES, file name=perf_K, output file=USER DEFINED
+*End Step
+```
+
+### 14.12.8 Job 2 — also read the bottom (fixed-end) reaction
+
+`RP_BOT` is fully fixed, so its reaction is the grounded reaction — read it alongside the top. It should be **equal and opposite** to the top reaction (a built-in equilibrium check).
+
+Add both reference sets to the output, and report both:
+
+```
+*OUTPUT, HISTORY
+*NODE OUTPUT, NSET=RP_TOP_SET
+U3, RF3
+*NODE OUTPUT, NSET=RP_BOT_SET
+RF3
+```
+
+In Visualization → **Report → Field Output** → Variable **RF3**, Position **Unique Nodal**, select `RP_BOT_SET`, check **Sum** → the summed `RF3` at the bottom should equal `−RF3(top)` to within solver noise. If it does not, an interior constraint or the coupling is leaking load — investigate before trusting the stiffness.
