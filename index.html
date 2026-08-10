@@ -114,18 +114,23 @@
 						<iframe src="images/WCS_Iterative_Creep_Projection_Turbo_Expo_V5.pdf" width="100%" height="1100px" style="border: none;"></iframe>
 
 							<br><br><br><br>
-							<div style="display: flex; justify-content: space-between; align-items: center;">
-							<a href="#" class="image featured" style="display: flex; justify-content: flex-start;">
-								<img src="images/turbo_expo_pic_2.jpg" alt="" style="width: 50%; height: auto;" />
-							</a>
-
-
+							
+							<!-- Added 'gap' to create space between the images -->
+							<div style="display: flex; gap: 20px; align-items: center;">
+							
+							    <!-- flex: 1 makes this take up exactly half the space -->
+							    <a href="#" class="image featured" style="flex: 1;">
+							        <!-- width: 100% makes the image fill its half of the container -->
+							        <img src="images/turbo_expo_pic_2.jpg" alt="" style="width: 100%; height: auto; display: block;" />
+							    </a>
+							
+							    <a href="#" class="image featured" style="flex: 1;">
+							        <img src="images/turbo_expo_pic_1.jpg" alt="" style="width: 100%; height: auto; display: block;" />
+							    </a>
+							
+							</div> 
+							
 							<br><br>
-
-							<a href="#" class="image featured" style="display: flex; justify-content: flex-center;">
-								<img src="images/turbo_expo_pic_1.jpg" alt="" style="width: 50%; height: auto;" />
-							</a>
-						<br><br>
 
 						
 						<!-- SpaceX -->
