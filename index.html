@@ -68,17 +68,20 @@
 						</header>
 						
 						<!-- Flex container to wrap both images side by side -->
-						<div style="display: flex; gap: 20px; align-items: center;">
-						
-						    <!-- First Image -->
-						    <a href="#" class="image featured" style="flex: 1;">
-						        <img src="images/turbo_expo_pic_2.jpg" alt="Turbo Expo" style="width: 60%; height: auto; display: block;" />
-						    </a>
-						
-						    <!-- Second Image -->
-						    <a href="#" class="image featured" style="flex: 1;">
-						        <img src="images/about.jpg" alt="About Me" style="width: 50%; height: auto; display: block;" />
-						    </a>
+								<!-- Added justify-content: center to keep the group centered on the page -->
+							<div style="display: flex; gap: 20px; justify-content: center; align-items: center;">
+							
+							    <!-- Set the size on the <a> tag instead of flex: 1 -->
+							    <a href="#" class="image featured" style="width: 40%;">
+							        <!-- Keep the image at 100% so it perfectly fills its new, smaller <a> container -->
+							        <img src="images/turbo_expo_pic_2.jpg" alt="Turbo Expo" style="width: 100%; height: auto; display: block;" />
+							    </a>
+							
+							    <!-- Set the size on the <a> tag here too -->
+							    <a href="#" class="image featured" style="width: 30%;">
+							        <img src="images/about.jpg" alt="About Me" style="width: 100%; height: auto; display: block;" />
+							    </a>
+							
 							</div>
 
 
